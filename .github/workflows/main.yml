@@ -32,6 +32,7 @@ jobs:
         run: |
           git config --local user.email "action@github.com"
           git config --local user.name "GitHub Action Scanner"
+          touch shir_khorshid_clean_ips.txt
           git add shir_khorshid_clean_ips.txt
           # اگر تغییر جدیدی نبود، اکشن ارور ندهد
           git commit -m "Auto-update clean IPs [skip ci]" || echo "No changes to commit"
