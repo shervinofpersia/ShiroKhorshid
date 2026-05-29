@@ -6,10 +6,7 @@ import requests
 
 # ================= تنظیمات اصلی =================
 DOMAINS = [
-    "akamaihd.net", "a.akamaihd.net", "akamai-staging.net", 
-    "edgekey-staging.net", "edgesuite-staging.net", "akamaihd-staging.net", 
-    "akamaized-staging.net", "akamaiedge-staging.net", "akamaiorigin-staging.net", 
-    "a.akamaized-staging.net"
+    "akamaihd.net", "a.akamaihd.net", "akamai-staging.net"
 ]
 
 GITHUB_RAW_BASE = "https://raw.githubusercontent.com/shervinofpersia/Akamai/5a602ab2751fbca4d789fe6d24f9468b2c897427/ip_lists/"
