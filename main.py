@@ -1,136 +1,101 @@
 import os
-import re
-import time
-import random
-import requests
+import socket
+import ssl
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # ================= تنظیمات اصلی =================
-# طبق پیشنهاد شما، فقط روی دو دامنه اصلی تست می‌شود تا سرعت و تعداد تست بالاتر برود
 DOMAINS = [
-    "akamaihd.net", 
-    "a.akamaihd.net"
-]
-
-GITHUB_RAW_BASE = "https://raw.githubusercontent.com/shervinofpersia/Akamai/5a602ab2751fbca4d789fe6d24f9468b2c897427/ip_lists/"
-AKAMAI_FILE_NAMES = [
-    "akamai_as20940.txt",
-    "akamai_cached.txt",
-    "akamai_cidr.txt",
-    "akamai_ipv4.txt"
+    "akamaihd.net",
+    "a.akamaihd.net",
+    "akamai-staging.net",
+    "edgekey-staging.net",
+    "edgesuite-staging.net",
+    "akamaihd-staging.net",
+    "akamaized-staging.net",
+    "akamaiedge-staging.net",
+    "akamaiorigin-staging.net",
+    "a.akamaized-staging.net"
 ]
 
 OUTPUT_FILE = "shir_khorshid_clean_ips.txt"
 
-# ================= توابع دریافت آی‌پی =================
-def get_random_ips_from_github(count_per_file=10):
-    """برداشتن ۱۰ آی‌پی از هر فایل (مجموعا ۴۰ آی‌پی در هر دور)"""
-    all_selected_ips = []
-    print("📡 Connecting to GitHub to fetch Akamai IP lists...")
+# ================= تابع تست مستقیم TLS و HTTP =================
+def test_ip_for_all_domains(ip):
+    """
+    تست مستقیم اتصال TCP، انجام TLS Handshake با SNI اختصاصی هر دامنه
+    و ارسال هدر HTTP برای اطمینان از پاسخ‌دهی سرورهای لبه آکامای.
+    """
+    context = ssl.create_default_context()
+    context.check_hostname = False
+    context.verify_mode = ssl.CERT_NONE  # دور زدن ارورهای عمومی سرتیفیکیت در اسکن عمومی
     
-    for file_name in AKAMAI_FILE_NAMES:
-        url = GITHUB_RAW_BASE + file_name
+    # آی‌پی باید روی تک‌تک دامنه‌ها با موفقیت هدر برگرداند
+    for domain in DOMAINS:
         try:
-            response = requests.get(url, timeout=10)
-            if response.status_code == 200:
-                ips_in_file = re.findall(r'[0-9]+(?:\.[0-9]+){3}', response.text)
-                if ips_in_file:
-                    sample_size = min(count_per_file, len(ips_in_file))
-                    random_samples = random.sample(ips_in_file, sample_size)
-                    all_selected_ips.extend(random_samples)
-        except Exception as e:
-            pass
+            # ۱. اتصال سوکت به پورت 443 آی‌پی آکامای
+            with socket.create_connection((ip, 443), timeout=2.5) as sock:
+                # ۲. شبیه‌سازی دست‌دادن TLS با لایه SNI دامنه مربوطه
+                with context.wrap_socket(sock, server_hostname=domain) as ssock:
+                    # ۳. ارسال یک درخواست متنی ساده برای گرفتن تاییدیه لبه سرور
+                    request = f"HEAD / HTTP/1.1\r\nHost: {domain}\r\nConnection: close\r\n\r\n"
+                    ssock.sendall(request.encode('utf-8'))
+                    
+                    # خواندن پاسخ اولیه سرور
+                    response = ssock.recv(128).decode('utf-8', errors='ignore')
+                    
+                    # اگر سرور آکامای پاسخ معتبر HTTP نداد، آی‌پی رد می‌شود
+                    if not response.startswith("HTTP/"):
+                        return None
+        except Exception:
+            # کوچکترین خطای شبکه، تایم‌اوت یا بلاک بودن پروتکل روی هر کدام از دامنه‌ها = رد شدن کل آی‌پی
+            return None
             
-    random.shuffle(all_selected_ips)
-    return all_selected_ips
+    return ip
 
-# ================= توابع تست Check-Host =================
-def create_check_host_task(target_ip, domain):
-    url = f"https://check-host.net/check-tcp?host={target_ip}:443&max_nodes=3&node=ir"
-    headers = {'Accept': 'application/json'}
-    try:
-        response = requests.get(url, headers=headers, timeout=10)
-        if response.status_code == 200:
-            return response.json().get("request_id")
-        else:
-            # اگر مسدود شویم، اینجا چاپ می‌کند تا دلیل سرعت بالا را بفهمیم
-            print(f"   ⚠️ API Blocked us! Status: {response.status_code}. Sleeping 15s...")
-            time.sleep(15) 
-    except Exception as e:
-        print(f"   ❌ Connection Error: {e}")
-    return None
-
-def get_check_host_result(request_id):
-    url = f"https://check-host.net/check-result/{request_id}"
-    headers = {'Accept': 'application/json'}
-    time.sleep(6) # حتما باید ۶ ثانیه صبر کنیم تا نودها جواب بدهند
+# ================= بدنه اصلی برنامه =================
+def main():
+    print("="*60)
+    print("🚀 Shir-Khorshid Direct Akamai Scanner (High-Speed Multi-Thread)")
+    print("="*60)
     
-    try:
-        response = requests.get(url, headers=headers, timeout=10)
-        if response.status_code == 200:
-            results = response.json()
-            for node, data in results.items():
-                if "ir" in node and data is not None:
-                    if any(item.get('status') == 1 for item in data if isinstance(item, dict)):
-                        return True
-    except Exception:
-        pass
-    return False
-
-# ================= توابع مدیریت فایل خروجی =================
-def save_clean_ips(new_ips):
+    # گسترش رنج مورد نظر شما به کل ساب‌نت /24 (تولید ۲۵۴ آی‌پی)
+    ips_to_test = [f"23.215.0.{i}" for i in range(1, 255)]
+    print(f"🎯 Generated {len(ips_to_test)} IPs from block: 23.215.0.0/24")
+    print(f"🔎 Testing each IP against all {len(DOMAINS)} domains directly...\n")
+    
+    valid_ips = []
+    
+    # استفاده از ۳۰ رشته موازی برای بالا بردن فوق‌العاده سرعت تست مستقیم روی رانر
+    with ThreadPoolExecutor(max_workers=30) as executor:
+        # ثبت تسک‌ها در صف پردازش
+        futures = {executor.submit(test_ip_for_all_domains, ip): ip for ip in ips_to_test}
+        
+        for future in as_completed(futures):
+            ip = futures[future]
+            try:
+                result = future.result()
+                if result:
+                    print(f"🎉 JACKPOT! {ip} passed all 10 domains successfully.")
+                    valid_ips.append(ip)
+            except Exception as e:
+                print(f"❌ Error during testing {ip}: {e}")
+                
+    # مدیریت فایل خروجی، ادغام با آی‌پی‌های قبلی و حذف موارد تکراری
     existing_ips = set()
     if os.path.exists(OUTPUT_FILE):
         with open(OUTPUT_FILE, "r") as f:
             existing_ips = set(line.strip() for line in f if line.strip())
-    
-    all_clean_ips = existing_ips.union(set(new_ips))
+            
+    all_clean_ips = existing_ips.union(set(valid_ips))
     
     with open(OUTPUT_FILE, "w") as f:
         for ip in sorted(all_clean_ips):
             f.write(f"{ip}\n")
-    print(f"\n💾 Saved {len(new_ips)} new IPs. Total unique IPs: {len(all_clean_ips)}")
-
-# ================= بدنه اصلی اسکریپت =================
-def main():
-    print("="*50)
-    print("🚀 Starting Shir-Khorshid Akamai Scanner (Optimized)")
-    print("="*50)
-    
-    # گرفتن ۴۰ آی‌پی رندوم در هر اجرا
-    ips_to_test = get_random_ips_from_github(count_per_file=10)
-    print(f"\n🎯 Loaded {len(ips_to_test)} random IPs. Testing on 2 main domains...")
-    
-    valid_ips = []
-
-    for index, ip in enumerate(ips_to_test, 1):
-        print(f"\n[{index}/{len(ips_to_test)}] Testing IP: {ip}")
-        ip_passed_all = True
-        
-        for domain in DOMAINS:
-            req_id = create_check_host_task(ip, domain)
             
-            if req_id:
-                is_working = get_check_host_result(req_id)
-                if not is_working:
-                    print(f"   ❌ Blocked on {domain}.")
-                    ip_passed_all = False
-                    break 
-                else:
-                    print(f"   ✅ Clean on {domain}")
-            else:
-                ip_passed_all = False
-                break
-            
-            time.sleep(4) # وقفه حیاتی برای جلوگیری از بلاک شدن توسط چک‌هاست
-                
-        if ip_passed_all:
-            print(f"   🎉 SUCCESS! IP is fully clean.")
-            valid_ips.append(ip)
-
-    if valid_ips:
-        save_clean_ips(valid_ips)
-    else:
-        print("\n⚠️ No valid IPs found in this round.")
+    print("\n" + "="*60)
+    print(f"💾 Scan Finished! Added {len(valid_ips)} new working IPs in this run.")
+    print(f"📂 Total unique operational IPs in sub-link: {len(all_clean_ips)}")
+    print("="*60)
 
 if __name__ == "__main__":
     main()
