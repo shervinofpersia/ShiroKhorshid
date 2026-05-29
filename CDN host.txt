@@ -1,0 +1,10 @@
+akamaihd.net
+a.akamaihd.net
+akamai-staging.net
+edgekey-staging.net
+edgesuite-staging.net
+akamaihd-staging.net
+akamaized-staging.net
+akamaiedge-staging.net
+akamaiorigin-staging.net
+a.akamaized-staging.net
